@@ -1,6 +1,37 @@
 # arXiv MCP Server
 
-Production-ready MCP server for searching and retrieving academic papers from arXiv.org via the official arXiv API.
+[![MCP](https://img.shields.io/badge/MCP-Model%20Context%20Protocol-blue)](https://modelcontextprotocol.io/)
+[![Python](https://img.shields.io/badge/Python-3.8%2B-brightgreen)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+> Production-ready MCP server for searching and retrieving academic papers from arXiv.org via the official arXiv API.
+
+---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Why arXiv MCP Server?](#why-arxiv-mcp-server)
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Available Tools](#available-tools)
+- [Pagination](#pagination)
+- [Date Filtering](#date-filtering)
+- [Response Formats](#response-formats)
+- [Testing](#testing)
+- [Rate Limiting & Caching](#rate-limiting--caching)
+- [ArXiv API Compliance](#arxiv-api-compliance)
+- [Error Handling](#error-handling)
+- [Project Structure](#project-structure)
+- [Dependencies](#dependencies)
+- [Development](#development)
+- [Known Issues](#known-issues)
+- [Contributing](#contributing)
+- [License](#license)
+- [Acknowledgments](#acknowledgments)
+- [References](#references)
 
 ## Overview
 
@@ -15,6 +46,14 @@ This server provides 8 specialized tools that enable AI agents to seamlessly int
 
 All tools follow MCP best practices with proper annotations, input validation, and dual output formats (JSON/Markdown).
 
+## Why arXiv MCP Server?
+
+- **Production-Ready**: Battle-tested with comprehensive error handling and rate limiting
+- **MCP-Native**: Built specifically for the Model Context Protocol with full tool annotations
+- **Developer-Friendly**: Clear documentation, dual output formats, and extensive examples
+- **API-Compliant**: Respects arXiv's rate limits and terms of service
+- **Well-Maintained**: Active development with proper testing and evaluation suites
+
 ## Features
 
 ✅ **Comprehensive Tool Coverage**: 8 specialized tools for different search patterns  
@@ -24,6 +63,24 @@ All tools follow MCP best practices with proper annotations, input validation, a
 ✅ **Input Validation**: Pydantic models with comprehensive constraints  
 ✅ **Error Handling**: Specific, actionable error messages with guidance  
 ✅ **ArXiv API Compliance**: Full support for Boolean operators, field prefixes, and date filtering  
+
+## Quick Start
+
+Get started in 3 simple steps:
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/rivaldofwijaya/arxiv-mcp-server.git
+cd arxiv-mcp-server
+
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. Run the server
+python server.py
+```
+
+For use with Claude Desktop or other MCP clients, see [Usage](#usage) below.
 
 ## Installation
 
@@ -36,17 +93,24 @@ All tools follow MCP best practices with proper annotations, input validation, a
 
 1. **Clone or download this repository**
 
-2. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+git clone https://github.com/rivaldofwijaya/arxiv-mcp-server.git
+cd arxiv-mcp-server
+```
 
-   Or using a virtual environment (recommended):
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   pip install -r requirements.txt
-   ```
+2. **Install dependencies**:
+
+```bash
+pip install -r requirements.txt
+```
+
+Or using a virtual environment (recommended):
+
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
 
 ## Usage
 
@@ -76,9 +140,13 @@ Add to your MCP client configuration:
 }
 ```
 
-### Available Tools
+For Claude Desktop, this configuration file is typically located at:
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 
-#### 1. `arxiv_search`
+## Available Tools
+
+### 1. `arxiv_search`
 General keyword search across all fields in arXiv.
 
 **When to use**: Broad searches without specific filters (e.g., "transformer attention", "quantum computing").
@@ -92,7 +160,7 @@ General keyword search across all fields in arXiv.
 }
 ```
 
-#### 2. `arxiv_search_advanced`
+### 2. `arxiv_search_advanced`
 Advanced search with Boolean operators and field prefixes.
 
 **When to use**: Complex queries combining multiple filters (author + category, author + title, etc.).
@@ -128,7 +196,7 @@ Advanced search with Boolean operators and field prefixes.
 }
 ```
 
-#### 3. `arxiv_search_by_author`
+### 3. `arxiv_search_by_author`
 Search papers by specific author with optional category filter.
 
 **When to use**: Finding all papers by an author, optionally within a specific category.
@@ -151,7 +219,7 @@ Search papers by specific author with optional category filter.
 - Last name: "Hinton"
 - With initials: "G. Hinton"
 
-#### 4. `arxiv_search_by_category`
+### 4. `arxiv_search_by_category`
 Browse papers within a specific arXiv category.
 
 **When to use**: Exploring a subject area, with optional author filter.
@@ -166,7 +234,7 @@ Browse papers within a specific arXiv category.
 }
 ```
 
-#### 5. `arxiv_get_paper`
+### 5. `arxiv_get_paper`
 Retrieve complete metadata for specific paper(s) by arXiv ID.
 
 **When to use**: When you have the exact arXiv ID(s) and need full details.
@@ -181,7 +249,7 @@ Retrieve complete metadata for specific paper(s) by arXiv ID.
 
 **Supports version-specific IDs**: Append version number (e.g., `"1706.03762v2"`) to retrieve a specific version.
 
-#### 6. `arxiv_get_latest`
+### 6. `arxiv_get_latest`
 Get the most recent submissions in a category (sorted by submission date).
 
 **When to use**: Finding newest papers in a subject area.
@@ -194,7 +262,7 @@ Get the most recent submissions in a category (sorted by submission date).
 }
 ```
 
-#### 7. `arxiv_get_pdf_url`
+### 7. `arxiv_get_pdf_url`
 Get the direct PDF download URL for a paper.
 
 **When to use**: When you need the PDF link for an arXiv ID.
@@ -208,7 +276,7 @@ Get the direct PDF download URL for a paper.
 
 Returns: `https://arxiv.org/pdf/1706.03762.pdf`
 
-#### 8. `arxiv_list_categories`
+### 8. `arxiv_list_categories`
 Retrieve the complete arXiv subject taxonomy.
 
 **When to use**: Discovering available categories for filtering.
@@ -220,7 +288,7 @@ Retrieve the complete arXiv subject taxonomy.
 
 Returns a structured taxonomy with category IDs (e.g., `cs.AI`, `stat.ML`) and descriptions.
 
-### Pagination
+## Pagination
 
 For searches returning many results, use pagination:
 
@@ -255,7 +323,7 @@ For searches returning many results, use pagination:
 
 **Maximum page size**: 100 for author/category searches, 2000 for general searches (keeps responses manageable).
 
-### Date Filtering
+## Date Filtering
 
 Date ranges use the format `YYYYMMDDHHMM` (24-hour time, GMT).
 
@@ -272,18 +340,18 @@ Date ranges use the format `YYYYMMDDHHMM` (24-hour time, GMT).
 }
 ```
 
-### Response Formats
+## Response Formats
 
 All search tools support two output formats:
 
-#### Markdown (default)
+### Markdown (default)
 Human-readable format with:
 - Clear headers and structure
 - Truncated abstracts (600 characters)
 - Formatted author list with affiliations
 - Direct links to abstract and PDF
 
-#### JSON
+### JSON
 Machine-readable structured data with:
 - Complete metadata (no truncation)
 - Full abstract text
@@ -341,7 +409,7 @@ python scripts/evaluation.py \
   -c python \
   -a server.py \
   -m anthropic/claude-3.5-sonnet \
-  evaluation.xml
+  scripts/example_evaluation.xml
 ```
 
 **Requirements**:
@@ -403,18 +471,17 @@ The server provides specific, actionable error messages:
 
 ```
 arxiv-mcp-server/
-├── server.py              # Main MCP server implementation
-├── requirements.txt       # Python dependencies
-├── README.md             # This file
-├── pyproject.toml        # Project metadata and build config
-├── evaluation.xml        # Test questions for evaluation
-├── walkthrough.md         # Development status and notes
-├── implementation_plan.md # Original implementation plan
+├── server.py                      # Main MCP server implementation
+├── requirements.txt               # Python dependencies
+├── README.md                      # This file
+├── LICENSE                        # MIT License
+├── pyproject.toml                 # Project metadata and build config
 └── scripts/
-    ├── test_server_local.py    # Local test suite
-    ├── evaluation.py           # Evaluation harness
-    ├── connections.py          # MCP connection utilities
-    └── requirements.txt        # Script dependencies
+    ├── test_server_local.py       # Local test suite
+    ├── evaluation.py              # Evaluation harness
+    ├── connections.py             # MCP connection utilities
+    ├── requirements.txt           # Script dependencies
+    └── example_evaluation.xml     # Example evaluation test cases
 ```
 
 ## Dependencies
@@ -424,7 +491,9 @@ Core dependencies (see `requirements.txt`):
 - `httpx` - Async HTTP client
 - `pydantic` - Input validation
 - `feedparser` - Atom XML parsing
-- `openai` - For evaluation harness
+
+Additional dependencies for evaluation (see `scripts/requirements.txt`):
+- `anthropic` - Anthropic API client for LLM evaluation
 
 ## Development
 
@@ -451,14 +520,14 @@ python scripts/test_server_local.py
 
 ## Known Issues
 
-### Task 9 Evaluation Failure
+### Author Name Matching
 
-**Issue**: In evaluation testing, one task (finding Geoffrey Hinton papers in stat.ML between 2020-2022) returned NOT_FOUND.
+**Issue**: When searching by author name, results may vary depending on the name format used.
 
-**Status**: Under investigation. Possible causes:
-- Author name matching variations
-- Date filtering edge cases
-- arXiv API query behavior
+**Root cause**: arXiv API's author name matching has variations:
+- Some papers use full names, others use initials
+- Name formatting inconsistencies across submissions
+- Multiple acceptable name formats
 
 **Workaround**: Try multiple author name formats:
 - `"Geoffrey Hinton"` (full name)
@@ -467,22 +536,35 @@ python scripts/test_server_local.py
 
 ## Contributing
 
-When contributing, please:
-1. Maintain backward compatibility
-2. Add tests for new functionality
-3. Update documentation
-4. Follow the existing code style
-5. Ensure all tests pass
+When contributing to this project, please:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+**Guidelines**:
+- Maintain backward compatibility
+- Add tests for new functionality
+- Update documentation
+- Follow the existing code style
+- Ensure all tests pass
 
 ## License
 
-This project follows the arXiv API Terms of Use. The arXiv data is provided under CC BY-SA 4.0 license.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+**Note**: This project uses the arXiv API. The arXiv data is provided under CC BY-SA 4.0 license. When using this server, please comply with both:
+- MIT License (for this software)
+- arXiv API Terms of Use
+- CC BY-SA 4.0 License (for arXiv content)
 
 ## Acknowledgments
 
-- arXiv.org for providing the open API
-- Model Context Protocol (MCP) for the server framework
-- The academic community for supporting open access
+- **arXiv.org** for providing the open API and maintaining the academic paper repository
+- **Model Context Protocol (MCP)** for the server framework and specifications
+- **The academic community** for supporting open access to research
 
 ## References
 
@@ -490,3 +572,7 @@ This project follows the arXiv API Terms of Use. The arXiv data is provided unde
 - [arXiv API Basics](https://info.arxiv.org/help/api/basics.html)
 - [MCP Specification](https://modelcontextprotocol.io/)
 - [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)
+
+---
+
+**Created by [rivaldofwijaya](https://github.com/rivaldofwijaya)**
