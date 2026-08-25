@@ -949,5 +949,10 @@ async def arxiv_get_latest(params: ArxivCategorySearchInput) -> str:
     return await _run_category_search(params, max_cache_age=LATEST_CACHE_EXPIRY)
 
 
-if __name__ == "__main__":
+def main() -> None:
+    '''Console-script entry point: run the MCP server over stdio.'''
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()

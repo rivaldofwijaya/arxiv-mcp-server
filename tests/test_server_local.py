@@ -2,7 +2,7 @@
 import asyncio
 import logging
 import sys
-from server import (
+from arxiv_mcp.server import (
     arxiv_search,
     arxiv_get_paper,
     arxiv_list_categories,

@@ -24,8 +24,8 @@ All tools support dual output formats (JSON for machines, Markdown for humans) a
 git clone https://github.com/rivaldofwijaya/arxiv-mcpserver.git
 cd arxiv-mcpserver
 
-# Install dependencies
-pip install -r requirements.txt
+# Install the package
+pip install .
 ```
 
 Or with a virtual environment:
@@ -33,8 +33,12 @@ Or with a virtual environment:
 ```bash
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
+pip install -e ".[dev]"    # editable install with the dev tools
 ```
+
+Installing the package puts an `arxiv-mcpserver` command on your PATH. If you
+would rather not install anything, `pip install -r requirements.txt` and run the
+server with `PYTHONPATH=src python -m arxiv_mcp`.
 
 ## Usage with AI Agents
 
@@ -48,8 +52,21 @@ Add this to your Claude Desktop config file:
 {
   "mcpServers": {
     "arxiv-mcpserver": {
+      "command": "arxiv-mcpserver"
+    }
+  }
+}
+```
+
+If you did not install the package, point at the module instead:
+
+```json
+{
+  "mcpServers": {
+    "arxiv-mcpserver": {
       "command": "python",
-      "args": ["/absolute/path/to/arxiv-mcpserver/server.py"]
+      "args": ["-m", "arxiv_mcp"],
+      "env": {"PYTHONPATH": "/absolute/path/to/arxiv-mcp/src"}
     }
   }
 }
@@ -63,8 +80,21 @@ Add the same configuration to your MCP settings:
 {
   "mcpServers": {
     "arxiv-mcpserver": {
+      "command": "arxiv-mcpserver"
+    }
+  }
+}
+```
+
+If you did not install the package, point at the module instead:
+
+```json
+{
+  "mcpServers": {
+    "arxiv-mcpserver": {
       "command": "python",
-      "args": ["/absolute/path/to/arxiv-mcpserver/server.py"]
+      "args": ["-m", "arxiv_mcp"],
+      "env": {"PYTHONPATH": "/absolute/path/to/arxiv-mcp/src"}
     }
   }
 }
@@ -78,8 +108,7 @@ Configure your Codex MCP settings to include the arXiv server:
 {
   "mcpServers": {
     "arxiv-mcpserver": {
-      "command": "python",
-      "args": ["/path/to/arxiv-mcpserver/server.py"]
+      "command": "arxiv-mcpserver"
     }
   }
 }
@@ -90,7 +119,7 @@ Configure your Codex MCP settings to include the arXiv server:
 For development and testing, you can use the MCP Inspector:
 
 ```bash
-npx @modelcontextprotocol/inspector python server.py
+npx @modelcontextprotocol/inspector arxiv-mcpserver
 ```
 
 ## Features
@@ -239,8 +268,25 @@ Each paper includes: ID, title, summary/abstract, authors, published date, updat
 Run the test suite (exits non-zero on failure, so it is safe to gate CI on):
 
 ```bash
-python scripts/test_server_local.py
+python tests/test_server_local.py
 ```
+
+Or through pytest, which picks up `src/` from `pyproject.toml`:
+
+```bash
+pytest
+```
+
+Lint and type-check the same way CI does:
+
+```bash
+ruff check src tests scripts
+black --check src tests scripts
+mypy src
+```
+
+These currently report pre-existing formatting and typing issues, so CI runs
+them as advisory steps rather than gates.
 
 Run the evaluation harness against a model via OpenRouter:
 
@@ -249,7 +295,7 @@ pip install -r scripts/requirements.txt
 
 # stdio transport
 python scripts/evaluation.py scripts/example_evaluation.xml \
-  -m anthropic/claude-sonnet-4.5 -c python -a server.py
+  -m anthropic/claude-sonnet-4.5 -c arxiv-mcpserver
 
 # sse / http transports
 python scripts/evaluation.py scripts/example_evaluation.xml \
@@ -270,18 +316,30 @@ looping indefinitely.
 ## Project Structure
 
 ```
-arxiv-mcpserver/
-├── server.py                      # Main MCP server
-├── requirements.txt               # Dependencies
+arxiv-mcp/
+├── src/
+│   └── arxiv_mcp/
+│       ├── __init__.py            # Public API re-exports
+│       ├── __main__.py            # `python -m arxiv_mcp`
+│       └── server.py              # Main MCP server
+├── tests/
+│   └── test_server_local.py       # Test suite
+├── scripts/
+│   ├── evaluation.py              # Evaluation harness
+│   ├── connections.py             # MCP utilities
+│   ├── requirements.txt           # Harness dependencies
+│   └── example_evaluation.xml     # Example tests
+├── docs/                          # Long-form documentation
+├── examples/                      # Usage examples
+├── tools/                         # Developer tooling
+├── reports/                       # Generated reports (evaluation output)
+├── dist/                          # Build artifacts (untracked)
+├── .github/                       # CI, security, issue and PR templates
+├── pyproject.toml                 # Project metadata and tool config
+├── requirements.txt               # Runtime dependencies
+├── SECURITY.md                    # Security policy
 ├── LICENSE                        # MIT License
-├── pyproject.toml                 # Project metadata
-├── README.md                      # This file
-└── scripts/
-    ├── test_server_local.py       # Test suite
-    ├── evaluation.py              # Evaluation harness
-    ├── connections.py             # MCP utilities
-    ├── requirements.txt           # Script dependencies
-    └── example_evaluation.xml     # Example tests
+└── README.md                      # This file
 ```
 
 ## Dependencies
@@ -302,6 +360,9 @@ supported, since it predates that module.
 
 ## Contributing
 
+Issue and pull request templates live in `.github/`. CI runs ruff, black, mypy,
+a build check, and the test suite on Python 3.9-3.13.
+
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/name`)
 3. Commit changes (`git commit -m 'Add feature'`)
@@ -310,7 +371,8 @@ supported, since it predates that module.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT License - see [LICENSE](LICENSE) for details. To report a security issue,
+see [SECURITY.md](SECURITY.md).
 
 When using this server with arXiv data, also comply with:
 - arXiv API Terms of Use
