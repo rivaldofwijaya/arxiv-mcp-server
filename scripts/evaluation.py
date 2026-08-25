@@ -243,32 +243,26 @@ async def evaluate_single_task(
             "summary": summary,
             "feedback": feedback,
         }
-    except TaskLimitExceeded as e:
-        print(f"⏱️ Task {task_index + 1} aborted: {e}")
-        return {
-            "question": qa_pair["question"],
-            "expected": qa_pair["answer"],
-            "actual": f"ABORTED: {str(e)}",
-            "score": 0,
-            "total_duration": time.time() - start_time,
-            "tool_calls": {},
-            "num_tool_calls": 0,
-            "summary": "N/A",
-            "feedback": f"Task aborted by budget guard: {str(e)}",
-        }
     except Exception as e:
-        print(f"❌ Error evaluating task {task_index + 1}: {e}")
-        traceback.print_exc()
+        aborted = isinstance(e, TaskLimitExceeded)
+        if aborted:
+            print(f"⏱️ Task {task_index + 1} aborted: {e}")
+        else:
+            print(f"❌ Error evaluating task {task_index + 1}: {e}")
+            traceback.print_exc()
+
+        label = "ABORTED" if aborted else "ERROR"
+        reason = "Task aborted by budget guard" if aborted else "Critical Error"
         return {
             "question": qa_pair["question"],
             "expected": qa_pair["answer"],
-            "actual": f"ERROR: {str(e)}",
+            "actual": f"{label}: {e}",
             "score": 0,
             "total_duration": time.time() - start_time,
             "tool_calls": {},
             "num_tool_calls": 0,
             "summary": "N/A",
-            "feedback": f"Critical Error: {str(e)}",
+            "feedback": f"{reason}: {e}",
         }
 
 

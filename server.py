@@ -42,6 +42,7 @@ CACHE_EXPIRY = 24 * 60 * 60  # 24 hours in seconds
 # day-old response, so they request a much shorter maximum age.
 LATEST_CACHE_EXPIRY = 5 * 60  # 5 minutes in seconds
 MAX_CACHE_ENTRIES = 1000  # Maximum number of cached queries
+ERROR_PREFIX = "Error: "  # Every failure message starts with this, so callers can detect one
 
 class ArxivCache:
     '''Simple in-memory cache for Arxiv responses with size limiting.'''
@@ -115,35 +116,48 @@ class SortOrder(str, Enum):
     DESCENDING = "descending"
 
 # Input Models
-def _check_date_range(model: BaseModel) -> BaseModel:
-    '''Reject half-open or inverted date ranges.
+class DateRangeInput(BaseModel):
+    '''Base model for inputs carrying an optional submittedDate range.
 
     The arXiv query syntax only supports a bounded submittedDate range, so a
     lone start_date or end_date cannot be honoured. Failing here is better than
     silently dropping the filter and returning unrestricted results.
     '''
-    start_date = model.start_date
-    end_date = model.end_date
-
-    if bool(start_date) != bool(end_date):
-        raise ValueError(
-            "start_date and end_date must be provided together "
-            "(arXiv only supports bounded submittedDate ranges)"
-        )
-
-    if start_date and end_date and start_date > end_date:
-        raise ValueError("start_date must not be later than end_date")
-
-    return model
-
-
-class ArxivSearchInput(BaseModel):
-    '''Input model for generic arXiv search.'''
     model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True)
 
-    query: str = Field(..., description="""The query string. e.g., 'all:electron', 'ti:"exact phrase"', 'au:del_maestro AND ti:checkerboard', 'au:"Geoffrey Hinton" AND cat:stat.ML'. Use quotes for exact phrases to avoid special character issues.""")
     start_date: Optional[str] = Field(default=None, description="Optional start date in format YYYYMMDDHHMM (24-hour time, GMT). Must be provided together with end_date; supplying only one is rejected.")
     end_date: Optional[str] = Field(default=None, description="Optional end date in format YYYYMMDDHHMM (24-hour time, GMT). Must be provided together with start_date; supplying only one is rejected.")
+
+    @field_validator('start_date', 'end_date')
+    @classmethod
+    def validate_dates(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if not v.isdigit() or len(v) != 12:
+            raise ValueError("Date must be in YYYYMMDDHHMM format (12 digits)")
+        try:
+            datetime.strptime(v, "%Y%m%d%H%M")
+        except ValueError:
+            raise ValueError("Invalid date or time components")
+        return v
+
+    @model_validator(mode="after")
+    def validate_date_range(self):
+        if bool(self.start_date) != bool(self.end_date):
+            raise ValueError(
+                "start_date and end_date must be provided together "
+                "(arXiv only supports bounded submittedDate ranges)"
+            )
+
+        if self.start_date and self.end_date and self.start_date > self.end_date:
+            raise ValueError("start_date must not be later than end_date")
+
+        return self
+
+
+class ArxivSearchInput(DateRangeInput):
+    '''Input model for generic arXiv search.'''
+    query: str = Field(..., description="""The query string. e.g., 'all:electron', 'ti:"exact phrase"', 'au:del_maestro AND ti:checkerboard', 'au:"Geoffrey Hinton" AND cat:stat.ML'. Use quotes for exact phrases to avoid special character issues.""")
     start: Optional[int] = Field(default=0, description="Number of results to skip for pagination (0-based init). Increment this to page through results.", ge=0)
     max_results: Optional[int] = Field(default=10, description="Max results to return (max 2000 per request, keep low for agents)", ge=1, le=2000)
     sort_by: Optional[SortBy] = Field(default=SortBy.RELEVANCE, description="Sorting parameter")
@@ -157,24 +171,6 @@ class ArxivSearchInput(BaseModel):
             raise ValueError("Query cannot be empty")
         return v.strip()
 
-    @field_validator('start_date', 'end_date')
-    @classmethod
-    def validate_dates(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return v
-        if not v.isdigit() or len(v) != 12:
-             raise ValueError("Date must be in YYYYMMDDHHMM format (12 digits)")
-        try:
-             import datetime
-             datetime.datetime.strptime(v, "%Y%m%d%H%M")
-        except ValueError:
-             raise ValueError("Invalid date or time components")
-        return v
-
-    @model_validator(mode="after")
-    def validate_date_range(self):
-        return _check_date_range(self)
-
 class ArxivGetPaperInput(BaseModel):
     '''Input model to retrieve specific arXiv papers by ID.'''
     model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True)
@@ -182,68 +178,25 @@ class ArxivGetPaperInput(BaseModel):
     id_list: List[str] = Field(..., description="List of arXiv IDs (e.g., '0710.5765v1', 'hep-ex/0307015')", min_length=1, max_length=50)
     response_format: ResponseFormat = Field(default=ResponseFormat.MARKDOWN, description="Output format")
 
-class ArxivAuthorSearchInput(BaseModel):
+class ArxivAuthorSearchInput(DateRangeInput):
     '''Input model for searching papers by author name, with optional category filtering.'''
-    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True)
-
     author_name: str = Field(..., description="Name of the author to search for. Consider using just the last name or initials if exact match fails (e.g. 'R. P. Feynman' vs 'Richard Feynman').")
     category: Optional[str] = Field(default=None, description="Optional category to filter by (e.g. 'stat.ML', 'cs.LG', 'cs.AI'). When provided, only papers in this category are returned.")
-    start_date: Optional[str] = Field(default=None, description="Optional start date in format YYYYMMDDHHMM (24-hour time, GMT). Must be provided together with end_date; supplying only one is rejected.")
-    end_date: Optional[str] = Field(default=None, description="Optional end date in format YYYYMMDDHHMM (24-hour time, GMT). Must be provided together with start_date; supplying only one is rejected.")
     start: Optional[int] = Field(default=0, description="Number of results to skip for pagination", ge=0)
     max_results: Optional[int] = Field(default=10, description="Max results to return", ge=1, le=100)
     sort_by: Optional[SortBy] = Field(default=SortBy.SUBMITTED_DATE, description="Sorting parameter")
     sort_order: Optional[SortOrder] = Field(default=SortOrder.DESCENDING, description="Sorting order")
     response_format: ResponseFormat = Field(default=ResponseFormat.MARKDOWN, description="Output format")
 
-    @field_validator('start_date', 'end_date')
-    @classmethod
-    def validate_dates(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return v
-        if not v.isdigit() or len(v) != 12:
-             raise ValueError("Date must be in YYYYMMDDHHMM format (12 digits)")
-        try:
-             import datetime
-             datetime.datetime.strptime(v, "%Y%m%d%H%M")
-        except ValueError:
-             raise ValueError("Invalid date or time components")
-        return v
-
-    @model_validator(mode="after")
-    def validate_date_range(self):
-        return _check_date_range(self)
-
-class ArxivCategorySearchInput(BaseModel):
+class ArxivCategorySearchInput(DateRangeInput):
     '''Input model for browsing a category, with optional author filtering.'''
-    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True)
-
     category: str = Field(..., description="The category ID to browse (e.g., 'cs.AI', 'physics.optics', 'stat.ML')")
     author_name: Optional[str] = Field(default=None, description="Optional author name to filter by. When provided, only papers by this author in the category are returned.")
-    start_date: Optional[str] = Field(default=None, description="Optional start date in format YYYYMMDDHHMM (24-hour time, GMT). Must be provided together with end_date; supplying only one is rejected.")
-    end_date: Optional[str] = Field(default=None, description="Optional end date in format YYYYMMDDHHMM (24-hour time, GMT). Must be provided together with start_date; supplying only one is rejected.")
     start: Optional[int] = Field(default=0, description="Number of results to skip for pagination", ge=0)
     max_results: Optional[int] = Field(default=10, description="Max results to return", ge=1, le=100)
     sort_by: Optional[SortBy] = Field(default=SortBy.SUBMITTED_DATE, description="Sorting parameter")
     sort_order: Optional[SortOrder] = Field(default=SortOrder.DESCENDING, description="Sorting order")
     response_format: ResponseFormat = Field(default=ResponseFormat.MARKDOWN, description="Output format")
-
-    @field_validator('start_date', 'end_date')
-    @classmethod
-    def validate_dates(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return v
-        if not v.isdigit() or len(v) != 12:
-             raise ValueError("Date must be in YYYYMMDDHHMM format (12 digits)")
-        try:
-             datetime.strptime(v, "%Y%m%d%H%M")
-        except ValueError:
-             raise ValueError("Invalid date or time components")
-        return v
-
-    @model_validator(mode="after")
-    def validate_date_range(self):
-        return _check_date_range(self)
 
 class ArxivGetPdfUrlInput(BaseModel):
     '''Input model for getting the PDF download URL of an arXiv paper.'''
@@ -330,8 +283,8 @@ def _handle_api_error(e: Exception) -> str:
 
     error_str = str(e)
     if "Arxiv API Error" in error_str:
-        return error_str
-    return f"Error: {type(e).__name__} - {error_str}"
+        return f"{ERROR_PREFIX}{error_str}"
+    return f"{ERROR_PREFIX}{type(e).__name__} - {error_str}"
 
 def _extract_paper_data(entry: Any) -> Dict[str, Any]:
     '''Extract relevant data from a feedparser entry into a structured dict.'''
@@ -473,11 +426,10 @@ async def _run_category_search(params: 'ArxivCategorySearchInput', max_cache_age
     if params.author_name:
         query_str += f' AND au:"{params.author_name}"'
 
-    if params.start_date and params.end_date:
-         query_str += f" AND submittedDate:[{params.start_date}+TO+{params.end_date}]"
-
     adv_params = ArxivSearchInput(
         query=query_str,
+        start_date=params.start_date,
+        end_date=params.end_date,
         start=params.start,
         max_results=params.max_results,
         sort_by=params.sort_by,
@@ -564,7 +516,7 @@ async def arxiv_search(params: ArxivSearchInput) -> str:
     # Only prepend 'all:' if no field prefix is detected at the start
     if not any(params.query.startswith(f"{p}:") for p in ['ti', 'au', 'abs', 'co', 'jr', 'cat', 'rn', 'all']):
         params.query = f"all:{params.query}"
-    return await arxiv_search_advanced(params)
+    return await _run_advanced_search(params)
 
 
 @mcp.tool(

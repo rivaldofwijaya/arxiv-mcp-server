@@ -8,6 +8,7 @@ from server import (
     arxiv_list_categories,
     ArxivSearchInput,
     ArxivGetPaperInput,
+    ERROR_PREFIX,
     SortBy,
     SortOrder,
     ResponseFormat
@@ -20,7 +21,7 @@ def assert_ok(result: str, context: str):
     """Fail loudly when a tool returns an error string or an empty response."""
     if not result or not result.strip():
         raise AssertionError(f"{context}: empty response")
-    if result.startswith("Error:"):
+    if result.startswith(ERROR_PREFIX):
         raise AssertionError(f"{context}: tool returned an error -> {result[:200]}")
 
 async def test_search():
@@ -46,21 +47,19 @@ async def test_get_paper():
         raise AssertionError("get paper: response does not mention the requested arXiv ID")
     print(result[:500] + "...")
 
-async def test_partial_date_range_rejected():
+def test_partial_date_range_rejected():
     print("\n--- Testing Partial Date Range Rejection ---")
-    try:
-        ArxivSearchInput(query="transformer", start_date="202001010000")
-    except ValueError:
-        print("start_date without end_date correctly rejected")
-    else:
-        raise AssertionError("partial date range: start_date without end_date was accepted")
-
-    try:
-        ArxivSearchInput(query="transformer", start_date="202212312359", end_date="202001010000")
-    except ValueError:
-        print("inverted date range correctly rejected")
-    else:
-        raise AssertionError("partial date range: start_date after end_date was accepted")
+    rejected_cases = [
+        ({"start_date": "202001010000"}, "start_date without end_date"),
+        ({"start_date": "202212312359", "end_date": "202001010000"}, "inverted date range"),
+    ]
+    for kwargs, description in rejected_cases:
+        try:
+            ArxivSearchInput(query="transformer", **kwargs)
+        except ValueError:
+            print(f"{description} correctly rejected")
+        else:
+            raise AssertionError(f"date range validation: {description} was accepted")
 
 async def test_rate_limiting_and_cache():
     print("\n--- Testing Rate Limiting and Cache ---")
@@ -93,7 +92,7 @@ async def main():
         await test_search()
         await test_advanced_search()
         await test_get_paper()
-        await test_partial_date_range_rejected()
+        test_partial_date_range_rejected()
         await test_rate_limiting_and_cache()
         await test_list_categories()
         print("\nAll tests passed successfully!")
