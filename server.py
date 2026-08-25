@@ -18,8 +18,8 @@ from typing import Optional, List, Dict, Any, Tuple
 
 import feedparser
 import httpx
-from pydantic import BaseModel, Field, ConfigDict, field_validator
-from mcp.server.fastmcp import FastMCP, Context
+from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
+from mcp.server.mcpserver import MCPServer, Context
 
 # Configure logging
 logging.basicConfig(
@@ -32,12 +32,15 @@ def _log_debug(msg: str):
     logger.debug(msg)
 
 # Initialize the MCP server
-mcp = FastMCP("arxiv-mcpserver")
+mcp = MCPServer("arxiv-mcpserver")
 
 # Constants
 API_BASE_URL = "https://export.arxiv.org/api/query"
 RATE_LIMIT_DELAY = 3.0  # Seconds between requests as per Arxiv guidelines
 CACHE_EXPIRY = 24 * 60 * 60  # 24 hours in seconds
+# Freshness-sensitive tools (e.g. arxiv_get_latest) must not be served a
+# day-old response, so they request a much shorter maximum age.
+LATEST_CACHE_EXPIRY = 5 * 60  # 5 minutes in seconds
 MAX_CACHE_ENTRIES = 1000  # Maximum number of cached queries
 
 class ArxivCache:
@@ -45,13 +48,21 @@ class ArxivCache:
     def __init__(self):
         self._cache: Dict[str, Tuple[float, Any]] = {}
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str, max_age: float = CACHE_EXPIRY) -> Optional[Any]:
+        '''Return a cached entry younger than max_age, if any.
+
+        A caller asking for a shorter max_age treats an older entry as a miss
+        but leaves it in place, so it can still serve callers that accept the
+        default expiry.
+        '''
         if key in self._cache:
             timestamp, data = self._cache[key]
-            if time.time() - timestamp < CACHE_EXPIRY:
-                return data
-            else:
+            age = time.time() - timestamp
+            if age >= CACHE_EXPIRY:
                 del self._cache[key]
+                return None
+            if age < max_age:
+                return data
         return None
 
     def set(self, key: str, data: Any):
@@ -104,13 +115,35 @@ class SortOrder(str, Enum):
     DESCENDING = "descending"
 
 # Input Models
+def _check_date_range(model: BaseModel) -> BaseModel:
+    '''Reject half-open or inverted date ranges.
+
+    The arXiv query syntax only supports a bounded submittedDate range, so a
+    lone start_date or end_date cannot be honoured. Failing here is better than
+    silently dropping the filter and returning unrestricted results.
+    '''
+    start_date = model.start_date
+    end_date = model.end_date
+
+    if bool(start_date) != bool(end_date):
+        raise ValueError(
+            "start_date and end_date must be provided together "
+            "(arXiv only supports bounded submittedDate ranges)"
+        )
+
+    if start_date and end_date and start_date > end_date:
+        raise ValueError("start_date must not be later than end_date")
+
+    return model
+
+
 class ArxivSearchInput(BaseModel):
     '''Input model for generic arXiv search.'''
     model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True)
 
     query: str = Field(..., description="""The query string. e.g., 'all:electron', 'ti:"exact phrase"', 'au:del_maestro AND ti:checkerboard', 'au:"Geoffrey Hinton" AND cat:stat.ML'. Use quotes for exact phrases to avoid special character issues.""")
-    start_date: Optional[str] = Field(default=None, description="Optional start date in format YYYYMMDDHHMM (24-hour time, GMT)")
-    end_date: Optional[str] = Field(default=None, description="Optional end date in format YYYYMMDDHHMM (24-hour time, GMT). Only valid if start_date is also provided.")
+    start_date: Optional[str] = Field(default=None, description="Optional start date in format YYYYMMDDHHMM (24-hour time, GMT). Must be provided together with end_date; supplying only one is rejected.")
+    end_date: Optional[str] = Field(default=None, description="Optional end date in format YYYYMMDDHHMM (24-hour time, GMT). Must be provided together with start_date; supplying only one is rejected.")
     start: Optional[int] = Field(default=0, description="Number of results to skip for pagination (0-based init). Increment this to page through results.", ge=0)
     max_results: Optional[int] = Field(default=10, description="Max results to return (max 2000 per request, keep low for agents)", ge=1, le=2000)
     sort_by: Optional[SortBy] = Field(default=SortBy.RELEVANCE, description="Sorting parameter")
@@ -138,6 +171,10 @@ class ArxivSearchInput(BaseModel):
              raise ValueError("Invalid date or time components")
         return v
 
+    @model_validator(mode="after")
+    def validate_date_range(self):
+        return _check_date_range(self)
+
 class ArxivGetPaperInput(BaseModel):
     '''Input model to retrieve specific arXiv papers by ID.'''
     model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True)
@@ -151,8 +188,8 @@ class ArxivAuthorSearchInput(BaseModel):
 
     author_name: str = Field(..., description="Name of the author to search for. Consider using just the last name or initials if exact match fails (e.g. 'R. P. Feynman' vs 'Richard Feynman').")
     category: Optional[str] = Field(default=None, description="Optional category to filter by (e.g. 'stat.ML', 'cs.LG', 'cs.AI'). When provided, only papers in this category are returned.")
-    start_date: Optional[str] = Field(default=None, description="Optional start date in format YYYYMMDDHHMM (24-hour time, GMT)")
-    end_date: Optional[str] = Field(default=None, description="Optional end date in format YYYYMMDDHHMM (24-hour time, GMT). Only valid if start_date is also provided.")
+    start_date: Optional[str] = Field(default=None, description="Optional start date in format YYYYMMDDHHMM (24-hour time, GMT). Must be provided together with end_date; supplying only one is rejected.")
+    end_date: Optional[str] = Field(default=None, description="Optional end date in format YYYYMMDDHHMM (24-hour time, GMT). Must be provided together with start_date; supplying only one is rejected.")
     start: Optional[int] = Field(default=0, description="Number of results to skip for pagination", ge=0)
     max_results: Optional[int] = Field(default=10, description="Max results to return", ge=1, le=100)
     sort_by: Optional[SortBy] = Field(default=SortBy.SUBMITTED_DATE, description="Sorting parameter")
@@ -173,14 +210,18 @@ class ArxivAuthorSearchInput(BaseModel):
              raise ValueError("Invalid date or time components")
         return v
 
+    @model_validator(mode="after")
+    def validate_date_range(self):
+        return _check_date_range(self)
+
 class ArxivCategorySearchInput(BaseModel):
     '''Input model for browsing a category, with optional author filtering.'''
     model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True)
 
     category: str = Field(..., description="The category ID to browse (e.g., 'cs.AI', 'physics.optics', 'stat.ML')")
     author_name: Optional[str] = Field(default=None, description="Optional author name to filter by. When provided, only papers by this author in the category are returned.")
-    start_date: Optional[str] = Field(default=None, description="Optional start date in format YYYYMMDDHHMM (24-hour time, GMT)")
-    end_date: Optional[str] = Field(default=None, description="Optional end date in format YYYYMMDDHHMM (24-hour time, GMT). Only valid if start_date is also provided.")
+    start_date: Optional[str] = Field(default=None, description="Optional start date in format YYYYMMDDHHMM (24-hour time, GMT). Must be provided together with end_date; supplying only one is rejected.")
+    end_date: Optional[str] = Field(default=None, description="Optional end date in format YYYYMMDDHHMM (24-hour time, GMT). Must be provided together with start_date; supplying only one is rejected.")
     start: Optional[int] = Field(default=0, description="Number of results to skip for pagination", ge=0)
     max_results: Optional[int] = Field(default=10, description="Max results to return", ge=1, le=100)
     sort_by: Optional[SortBy] = Field(default=SortBy.SUBMITTED_DATE, description="Sorting parameter")
@@ -200,6 +241,10 @@ class ArxivCategorySearchInput(BaseModel):
              raise ValueError("Invalid date or time components")
         return v
 
+    @model_validator(mode="after")
+    def validate_date_range(self):
+        return _check_date_range(self)
+
 class ArxivGetPdfUrlInput(BaseModel):
     '''Input model for getting the PDF download URL of an arXiv paper.'''
     model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True)
@@ -208,9 +253,13 @@ class ArxivGetPdfUrlInput(BaseModel):
 
 
 # Helper Functions
-async def _make_api_request(params: dict) -> dict:
+async def _make_api_request(params: dict, max_cache_age: float = CACHE_EXPIRY) -> dict:
     '''Reusable function for arXiv API calls with rate limiting and caching.
-    
+
+    max_cache_age caps how old a cached response may be for this call. Tools
+    that promise freshness pass a short value so they refetch instead of
+    replaying a stale cache entry.
+
     URL Encoding Note:
     The 'safe' parameter in urlencode preserves arXiv query syntax characters:
     - ':' separates field prefixes from values (e.g., 'au:Hinton')
@@ -223,7 +272,7 @@ async def _make_api_request(params: dict) -> dict:
     '''
     # Generate cache key from sorted params
     cache_key = json.dumps(params, sort_keys=True)
-    cached_data = cache.get(cache_key)
+    cached_data = cache.get(cache_key, max_age=max_cache_age)
     if cached_data:
         _log_debug("Returning cached results")
         return cached_data
@@ -377,6 +426,67 @@ def _format_papers_markdown(papers: List[Dict[str, Any]], query_info: str, total
     return "\n".join(lines)
 
 
+async def _run_advanced_search(params: 'ArxivSearchInput', max_cache_age: float = CACHE_EXPIRY) -> str:
+    '''Shared implementation behind the advanced-search tool.
+
+    Kept separate from the tool function so internal callers can tune cache
+    freshness without adding a parameter to the published tool schema.
+    '''
+    try:
+        query_str = params.query
+        if params.start_date and params.end_date:
+            query_str += f" AND submittedDate:[{params.start_date}+TO+{params.end_date}]"
+
+        api_params = {
+            "search_query": query_str,
+            "start": params.start,
+            "max_results": params.max_results,
+            "sortBy": params.sort_by.value,
+            "sortOrder": params.sort_order.value
+        }
+
+        feed = await _make_api_request(api_params, max_cache_age=max_cache_age)
+
+        papers = [_extract_paper_data(entry) for entry in feed.entries]
+        total_results = int(feed.feed.get('opensearch_totalresults', 0))
+
+        if params.response_format == ResponseFormat.MARKDOWN:
+            return _format_papers_markdown(papers, f"Query '{params.query}'", total_results, params.start, params.max_results)
+        else:
+            return json.dumps({
+                "query": params.query,
+                "total_results": total_results,
+                "start": params.start,
+                "has_more": total_results > (params.start + len(papers)),
+                "papers": papers
+            }, indent=2)
+
+    except Exception as e:
+        return _handle_api_error(e)
+
+
+async def _run_category_search(params: 'ArxivCategorySearchInput', max_cache_age: float = CACHE_EXPIRY) -> str:
+    '''Shared implementation behind the category-browse and latest tools.'''
+    query_str = f"cat:{params.category}"
+
+    # Add author filter if provided
+    if params.author_name:
+        query_str += f' AND au:"{params.author_name}"'
+
+    if params.start_date and params.end_date:
+         query_str += f" AND submittedDate:[{params.start_date}+TO+{params.end_date}]"
+
+    adv_params = ArxivSearchInput(
+        query=query_str,
+        start=params.start,
+        max_results=params.max_results,
+        sort_by=params.sort_by,
+        sort_order=params.sort_order,
+        response_format=params.response_format
+    )
+    return await _run_advanced_search(adv_params, max_cache_age=max_cache_age)
+
+
 # --- TOOLS ---
 
 @mcp.tool(
@@ -416,38 +526,11 @@ async def arxiv_search_advanced(params: ArxivSearchInput) -> str:
         - Category only: 'cat:cs.AI'
         - Exclude terms: 'cat:cs.AI ANDNOT ti:neural'
         - Date range in query: 'au:"Geoffrey Hinton" AND cat:stat.ML AND submittedDate:[202001010000+TO+202212312359]'
+
+    Date filtering:
+        start_date and end_date must be supplied together; a lone bound is rejected.
     '''
-    try:
-        query_str = params.query
-        if params.start_date and params.end_date:
-            query_str += f" AND submittedDate:[{params.start_date}+TO+{params.end_date}]"
-            
-        api_params = {
-            "search_query": query_str,
-            "start": params.start,
-            "max_results": params.max_results,
-            "sortBy": params.sort_by.value,
-            "sortOrder": params.sort_order.value
-        }
-        
-        feed = await _make_api_request(api_params)
-        
-        papers = [_extract_paper_data(entry) for entry in feed.entries]
-        total_results = int(feed.feed.get('opensearch_totalresults', 0))
-        
-        if params.response_format == ResponseFormat.MARKDOWN:
-            return _format_papers_markdown(papers, f"Query '{params.query}'", total_results, params.start, params.max_results)
-        else:
-            return json.dumps({
-                "query": params.query,
-                "total_results": total_results,
-                "start": params.start,
-                "has_more": total_results > (params.start + len(papers)),
-                "papers": papers
-            }, indent=2)
-            
-    except Exception as e:
-        return _handle_api_error(e)
+    return await _run_advanced_search(params)
 
 
 @mcp.tool(
@@ -605,7 +688,7 @@ async def arxiv_search_by_author(params: ArxivAuthorSearchInput) -> str:
         sort_order=params.sort_order,
         response_format=params.response_format
     )
-    return await arxiv_search_advanced(adv_params)
+    return await _run_advanced_search(adv_params)
 
 
 @mcp.tool(
@@ -638,24 +721,7 @@ async def arxiv_search_by_category(params: ArxivCategorySearchInput) -> str:
         category='stat.ML', author_name='Geoffrey Hinton',
         start_date='202001010000', end_date='202212312359'
     '''
-    query_str = f"cat:{params.category}"
-
-    # Add author filter if provided
-    if params.author_name:
-        query_str += f' AND au:"{params.author_name}"'
-
-    if params.start_date and params.end_date:
-         query_str += f" AND submittedDate:[{params.start_date}+TO+{params.end_date}]"
-
-    adv_params = ArxivSearchInput(
-        query=query_str,
-        start=params.start,
-        max_results=params.max_results,
-        sort_by=params.sort_by,
-        sort_order=params.sort_order,
-        response_format=params.response_format
-    )
-    return await arxiv_search_advanced(adv_params)
+    return await _run_category_search(params)
 
 
 @mcp.tool(
@@ -919,14 +985,16 @@ async def arxiv_get_latest(params: ArxivCategorySearchInput) -> str:
     '''Get the strictly latest submissions for a category, sorted by submission date (newest first).
 
     A convenience tool over category search that enforces sorting by
-    submitted date descending.
+    submitted date descending. Because this tool promises freshness, results
+    are served from cache only if they are less than 5 minutes old, unlike the
+    24-hour cache used by the other search tools.
 
     Args:
         params: Category ID (e.g. 'cs.AI', 'stat.ML'), limit.
     '''
     params.sort_by = SortBy.SUBMITTED_DATE
     params.sort_order = SortOrder.DESCENDING
-    return await arxiv_search_by_category(params)
+    return await _run_category_search(params, max_cache_age=LATEST_CACHE_EXPIRY)
 
 
 if __name__ == "__main__":

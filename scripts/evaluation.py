@@ -19,6 +19,17 @@ from openai import OpenAI
 
 from connections import create_connection
 
+# Bounds for the agent loop. Without these a model that keeps emitting tool calls
+# (or retries a persistently failing tool) can hang the run, burn OpenRouter
+# credit, and hammer the arXiv API indefinitely.
+DEFAULT_MAX_TOOL_ROUNDS = 10
+DEFAULT_TASK_TIMEOUT_S = 300.0
+
+
+class TaskLimitExceeded(RuntimeError):
+    """Raised when a task exceeds its tool-round or wall-clock budget."""
+
+
 EVALUATION_PROMPT = """You are an AI assistant with access to tools.
 
 When given a task, you MUST:
@@ -90,8 +101,15 @@ async def agent_loop(
     question: str,
     tools: list[dict[str, Any]],
     connection: Any,
+    max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS,
+    timeout_s: float = DEFAULT_TASK_TIMEOUT_S,
 ) -> tuple[str, dict[str, Any]]:
-    """Run the agent loop with MCP tools via OpenRouter."""
+    """Run the agent loop with MCP tools via OpenRouter.
+
+    The loop is bounded by both `max_tool_rounds` and `timeout_s`; exceeding
+    either raises TaskLimitExceeded so the caller can record the task as failed.
+    """
+    deadline = time.time() + timeout_s
     messages = [{"role": "user", "content": question}]
     
     # Convert MCP tool schema to OpenAI tool schema
@@ -122,8 +140,19 @@ async def agent_loop(
     messages.append(assistant_message)
     
     tool_metrics = {}
+    tool_rounds = 0
 
     while assistant_message.tool_calls:
+        tool_rounds += 1
+        if tool_rounds > max_tool_rounds:
+            raise TaskLimitExceeded(
+                f"Exceeded max tool rounds ({max_tool_rounds}) without a final answer"
+            )
+        if time.time() > deadline:
+            raise TaskLimitExceeded(
+                f"Exceeded task timeout ({timeout_s:.0f}s) without a final answer"
+            )
+
         for tool_call in assistant_message.tool_calls:
             tool_name = tool_call.function.name
             tool_input = json.loads(tool_call.function.arguments)
@@ -173,7 +202,7 @@ async def agent_loop(
         assistant_message = response.choices[0].message
         messages.append(assistant_message)
 
-    return assistant_message.content, tool_metrics
+    return assistant_message.content or "", tool_metrics
 
 
 async def evaluate_single_task(
@@ -183,13 +212,19 @@ async def evaluate_single_task(
     tools: list[dict[str, Any]],
     connection: Any,
     task_index: int,
+    max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS,
+    timeout_s: float = DEFAULT_TASK_TIMEOUT_S,
 ) -> dict[str, Any]:
     """Evaluate a single QA pair with the given tools."""
     start_time = time.time()
 
     print(f"\n--- Task {task_index + 1}: {qa_pair['question']} ---")
     try:
-        response, tool_metrics = await agent_loop(client, model, qa_pair["question"], tools, connection)
+        response, tool_metrics = await agent_loop(
+            client, model, qa_pair["question"], tools, connection,
+            max_tool_rounds=max_tool_rounds,
+            timeout_s=timeout_s,
+        )
         
         response_value = extract_xml_content(response, "response")
         summary = extract_xml_content(response, "summary")
@@ -207,6 +242,19 @@ async def evaluate_single_task(
             "num_tool_calls": sum(len(metrics["durations"]) for metrics in tool_metrics.values()),
             "summary": summary,
             "feedback": feedback,
+        }
+    except TaskLimitExceeded as e:
+        print(f"⏱️ Task {task_index + 1} aborted: {e}")
+        return {
+            "question": qa_pair["question"],
+            "expected": qa_pair["answer"],
+            "actual": f"ABORTED: {str(e)}",
+            "score": 0,
+            "total_duration": time.time() - start_time,
+            "tool_calls": {},
+            "num_tool_calls": 0,
+            "summary": "N/A",
+            "feedback": f"Task aborted by budget guard: {str(e)}",
         }
     except Exception as e:
         print(f"❌ Error evaluating task {task_index + 1}: {e}")
@@ -262,6 +310,8 @@ async def run_evaluation(
     connection: Any,
     api_key: str,
     model: str,
+    max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS,
+    timeout_s: float = DEFAULT_TASK_TIMEOUT_S,
 ) -> str:
     """Run evaluation with MCP server tools."""
     print(f"🚀 Starting Evaluation with model: {model}")
@@ -284,7 +334,11 @@ async def run_evaluation(
     results = []
     for i, qa_pair in enumerate(qa_pairs):
         print(f"Processing task {i + 1}/{len(qa_pairs)}")
-        result = await evaluate_single_task(client, model, qa_pair, tools, connection, i)
+        result = await evaluate_single_task(
+            client, model, qa_pair, tools, connection, i,
+            max_tool_rounds=max_tool_rounds,
+            timeout_s=timeout_s,
+        )
         results.append(result)
 
     correct = sum(r["score"] for r in results)
@@ -336,7 +390,19 @@ async def main():
     stdio_group.add_argument("-a", "--args", nargs="+", help="Arguments for the command (stdio only)")
     stdio_group.add_argument("-e", "--env", nargs="+", help="Environment variables in KEY=VALUE format (stdio only)")
 
+    remote_group = parser.add_argument_group("sse/http options")
+    remote_group.add_argument("-u", "--url", help="MCP server URL (required for sse and http transports)")
+    remote_group.add_argument("-H", "--header", nargs="+", help="HTTP headers in KEY=VALUE format (sse and http only)")
+
     parser.add_argument("-o", "--output", type=Path, help="Output file for evaluation report (default: stdout)")
+    parser.add_argument(
+        "--max-tool-rounds", type=int, default=DEFAULT_MAX_TOOL_ROUNDS,
+        help=f"Max tool-call rounds per task before aborting it (default: {DEFAULT_MAX_TOOL_ROUNDS})",
+    )
+    parser.add_argument(
+        "--task-timeout", type=float, default=DEFAULT_TASK_TIMEOUT_S,
+        help=f"Wall-clock budget in seconds per task (default: {DEFAULT_TASK_TIMEOUT_S:.0f})",
+    )
 
     args = parser.parse_args()
 
@@ -349,12 +415,22 @@ async def main():
         print(f"Error: Evaluation file not found: {args.eval_file}")
         sys.exit(1)
 
+    if args.max_tool_rounds < 1:
+        print("Error: --max-tool-rounds must be at least 1")
+        sys.exit(1)
+
+    if args.task_timeout <= 0:
+        print("Error: --task-timeout must be greater than 0")
+        sys.exit(1)
+
     try:
         connection = create_connection(
             transport=args.transport,
             command=args.command,
             args=args.args,
             env=parse_env_vars(args.env) if args.env else None,
+            url=args.url,
+            headers=parse_env_vars(args.header) if args.header else None,
         )
     except ValueError as e:
         print(f"Error: {e}")
@@ -364,7 +440,11 @@ async def main():
 
     async with connection:
         print("✅ Connected successfully")
-        report = await run_evaluation(args.eval_file, connection, api_key, args.model)
+        report = await run_evaluation(
+            args.eval_file, connection, api_key, args.model,
+            max_tool_rounds=args.max_tool_rounds,
+            timeout_s=args.task_timeout,
+        )
 
         if args.output:
             args.output.write_text(report)
@@ -374,7 +454,7 @@ async def main():
 
 
 def parse_env_vars(env_list: list[str]) -> dict[str, str]:
-    """Parse environment variable strings in format 'KEY=VALUE' into a dictionary."""
+    """Parse 'KEY=VALUE' strings into a dictionary (used for env vars and HTTP headers)."""
     env = {}
     if not env_list:
         return env

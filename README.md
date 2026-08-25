@@ -216,6 +216,11 @@ Use format `YYYYMMDDHHMM` (24-hour time, GMT):
 }
 ```
 
+arXiv only supports bounded `submittedDate` ranges, so `start_date` and
+`end_date` must be supplied together. Passing just one (or a `start_date` later
+than `end_date`) is rejected with a validation error rather than silently
+returning unfiltered results.
+
 ## Response Formats
 
 All tools support either `json` (complete data) or `markdown` (human-readable).
@@ -231,16 +236,35 @@ Each paper includes: ID, title, summary/abstract, authors, published date, updat
 
 ## Testing
 
-Run the test suite:
+Run the test suite (exits non-zero on failure, so it is safe to gate CI on):
 
 ```bash
 python scripts/test_server_local.py
 ```
 
+Run the evaluation harness against a model via OpenRouter:
+
+```bash
+pip install -r scripts/requirements.txt
+
+# stdio transport
+python scripts/evaluation.py scripts/example_evaluation.xml \
+  -m anthropic/claude-sonnet-4.5 -c python -a server.py
+
+# sse / http transports
+python scripts/evaluation.py scripts/example_evaluation.xml \
+  -m anthropic/claude-sonnet-4.5 -t http -u https://your-server/mcp -H "Authorization=Bearer TOKEN"
+```
+
+Each task is bounded by `--max-tool-rounds` (default 10) and `--task-timeout`
+seconds (default 300); exceeding either records the task as failed instead of
+looping indefinitely.
+
 ## Rate Limiting & Caching
 
 - **Rate Limiting**: Enforces arXiv's 3-second delay between requests
 - **Caching**: 24-hour cache reduces redundant API calls
+- **Freshness**: `arxiv_get_latest` accepts cached results only if under 5 minutes old, so it never replays a day-old view of a category
 - **Compliance**: Uses HTTPS endpoint and respects arXiv Terms of Use
 
 ## Project Structure
@@ -262,9 +286,12 @@ arxiv-mcpserver/
 
 ## Dependencies
 
-Core: `mcp[cli]`, `httpx`, `pydantic`, `feedparser`
+Core: `mcp[cli]` (2.x), `httpx`, `pydantic`, `feedparser`
 
-For testing: `anthropic` (see `scripts/requirements.txt`)
+For evaluation: `openai`, `mcp` (see `scripts/requirements.txt`)
+
+Built on the mcp 2.x `MCPServer` API (`mcp.server.mcpserver`). mcp 1.x is not
+supported, since it predates that module.
 
 ## Known Issues
 

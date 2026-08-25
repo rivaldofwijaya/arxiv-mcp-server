@@ -7,7 +7,7 @@ from typing import Any
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
 
 
 class MCPConnection(ABC):
@@ -59,7 +59,7 @@ class MCPConnection(ABC):
             {
                 "name": tool.name,
                 "description": tool.description,
-                "input_schema": tool.inputSchema,
+                "input_schema": tool.input_schema,
             }
             for tool in response.tools
         ]
@@ -106,7 +106,10 @@ class MCPConnectionHTTP(MCPConnection):
         self.headers = headers or {}
 
     def _create_context(self):
-        return streamablehttp_client(url=self.url, headers=self.headers)
+        # streamable_http_client takes a preconfigured client rather than
+        # headers, so custom headers are attached via the shared factory.
+        http_client = create_mcp_http_client(headers=self.headers) if self.headers else None
+        return streamable_http_client(url=self.url, http_client=http_client)
 
 
 def create_connection(
