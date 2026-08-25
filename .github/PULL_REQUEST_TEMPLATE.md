@@ -14,9 +14,9 @@
 
 <!-- How did you verify this? Paste the relevant command output. -->
 
-- [ ] `ruff check src tests scripts` and `black --check src tests scripts` pass
+- [ ] `ruff check src dev/tests dev/scripts` and `black --check src dev/tests dev/scripts` pass
 - [ ] `mypy src` passes
-- [ ] `python tests/test_server_local.py` passes against the live arXiv API
+- [ ] `python dev/tests/test_server_local.py` passes against the live arXiv API
 - [ ] Verified in an MCP client (`npx @modelcontextprotocol/inspector python -m arxiv_mcp`)
 
 ## Checklist

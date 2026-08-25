@@ -268,7 +268,7 @@ Each paper includes: ID, title, summary/abstract, authors, published date, updat
 Run the test suite (exits non-zero on failure, so it is safe to gate CI on):
 
 ```bash
-python tests/test_server_local.py
+python dev/tests/test_server_local.py
 ```
 
 Or through pytest, which picks up `src/` from `pyproject.toml`:
@@ -280,8 +280,8 @@ pytest
 Lint and type-check the same way CI does:
 
 ```bash
-ruff check src tests scripts
-black --check src tests scripts
+ruff check src dev/tests dev/scripts
+black --check src dev/tests dev/scripts
 mypy src
 ```
 
@@ -291,14 +291,14 @@ them as advisory steps rather than gates.
 Run the evaluation harness against a model via OpenRouter:
 
 ```bash
-pip install -r scripts/requirements.txt
+pip install -r dev/scripts/requirements.txt
 
 # stdio transport
-python scripts/evaluation.py scripts/example_evaluation.xml \
+python dev/scripts/evaluation.py dev/scripts/example_evaluation.xml \
   -m anthropic/claude-sonnet-4.5 -c arxiv-mcpserver
 
 # sse / http transports
-python scripts/evaluation.py scripts/example_evaluation.xml \
+python dev/scripts/evaluation.py dev/scripts/example_evaluation.xml \
   -m anthropic/claude-sonnet-4.5 -t http -u https://your-server/mcp -H "Authorization=Bearer TOKEN"
 ```
 
@@ -322,18 +322,18 @@ arxiv-mcp/
 │       ├── __init__.py            # Public API re-exports
 │       ├── __main__.py            # `python -m arxiv_mcp`
 │       └── server.py              # Main MCP server
-├── tests/
-│   └── test_server_local.py       # Test suite
-├── scripts/
-│   ├── evaluation.py              # Evaluation harness
-│   ├── connections.py             # MCP utilities
-│   ├── requirements.txt           # Harness dependencies
-│   └── example_evaluation.xml     # Example tests
-├── docs/                          # Long-form documentation
-├── examples/                      # Usage examples
-├── tools/                         # Developer tooling
-├── reports/                       # Generated reports (evaluation output)
-├── dist/                          # Build artifacts (untracked)
+├── dev/                           # Everything that is not shipped
+│   ├── tests/
+│   │   └── test_server_local.py   # Test suite
+│   ├── scripts/
+│   │   ├── evaluation.py          # Evaluation harness
+│   │   ├── connections.py         # MCP utilities
+│   │   ├── requirements.txt       # Harness dependencies
+│   │   └── example_evaluation.xml # Example tests
+│   ├── docs/                      # Long-form documentation
+│   ├── examples/                  # Usage examples
+│   ├── tools/                     # Developer tooling
+│   └── reports/                   # Generated reports (evaluation output)
 ├── .github/                       # CI, security, issue and PR templates
 ├── pyproject.toml                 # Project metadata and tool config
 ├── requirements.txt               # Runtime dependencies
@@ -346,7 +346,7 @@ arxiv-mcp/
 
 Core: `mcp[cli]` (2.x), `httpx`, `pydantic`, `feedparser`
 
-For evaluation: `openai`, `mcp` (see `scripts/requirements.txt`)
+For evaluation: `openai`, `mcp` (see `dev/scripts/requirements.txt`)
 
 Built on the mcp 2.x `MCPServer` API (`mcp.server.mcpserver`). mcp 1.x is not
 supported, since it predates that module.

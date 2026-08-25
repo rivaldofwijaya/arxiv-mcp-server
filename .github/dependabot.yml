@@ -11,7 +11,7 @@ updates:
         patterns: ["*"]
 
   - package-ecosystem: pip
-    directory: "/scripts"
+    directory: "/dev/scripts"
     schedule:
       interval: weekly
     open-pull-requests-limit: 3

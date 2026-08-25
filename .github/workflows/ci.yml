@@ -33,10 +33,10 @@ jobs:
       # typing debt is cleared, so the job starts gating merges.
       - name: Ruff
         continue-on-error: true
-        run: ruff check src tests scripts
+        run: ruff check src dev/tests dev/scripts
       - name: Black
         continue-on-error: true
-        run: black --check src tests scripts
+        run: black --check src dev/tests dev/scripts
       - name: Mypy
         continue-on-error: true
         run: mypy src
@@ -64,7 +64,7 @@ jobs:
       # from CI runners, so a failure here is reported but does not fail the job.
       - name: Integration tests (live arXiv API)
         continue-on-error: true
-        run: python tests/test_server_local.py
+        run: python dev/tests/test_server_local.py
 
   build:
     name: Build distribution
